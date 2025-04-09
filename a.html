@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NanoDet Web Demo</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.18.0"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      background-color: #f0f0f0;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    h1 {
+      text-align: center;
+      color: #333;
+    }
+    .video-container {
+      position: relative;
+      margin-bottom: 20px;
+    }
+    #video {
+      width: 100%;
+      border-radius: 8px;
+      display: block;
+    }
+    #canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      border-radius: 8px;
+    }
+    .controls {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 20px;
+    }
+    button {
+      background-color: #4CAF50;
+      border: none;
+      color: white;
+      padding: 10px 20px;
+      text-align: center;
+      text-decoration: none;
+      display: inline-block;
+      font-size: 16px;
+      margin: 4px 2px;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    button:disabled {
+      background-color: #cccccc;
+      cursor: not-allowed;
+    }
+    .status {
+      background-color: #333;
+      color: white;
+      padding: 10px;
+      border-radius: 4px;
+      margin-bottom: 20px;
+    }
+    .detections {
+      background-color: white;
+      border-radius: 8px;
+      padding: 10px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .detection-item {
+      padding: 8px;
+      margin-bottom: 5px;
+      background-color: #f9f9f9;
+      border-radius: 4px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .detection-class {
+      font-weight: bold;
+    }
+    .detection-score {
+      color: #4CAF50;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>NanoDet Web Demo</h1>
+    
+    <div class="status" id="status">
+      Cargando TensorFlow.js...
+    </div>
+    
+    <div class="video-container">
+      <video id="video" autoplay playsinline></video>
+      <canvas id="canvas"></canvas>
+    </div>
+    
+    <div class="controls">
+      <button id="startButton">Iniciar Cámara</button>
+      <button id="detectButton" disabled>Detectar Objetos</button>
+      <button id="switchButton" disabled>Cambiar Cámara</button>
+    </div>
+    
+    <div class="detections" id="detections">
+      <h3>Detecciones</h3>
+      <div id="detectionsList"></div>
+    </div>
+  </div>
+
+  <script>
+    // COCO dataset classes
+    const LABELS = [
+      "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
+      "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat",
+      "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack",
+      "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball",
+      "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket",
+      "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
+      "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair",
+      "couch", "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse",
+      "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
+      "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"
+    ];
+
+    // DOM elements
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const startButton = document.getElementById("startButton");
+    const detectButton = document.getElementById("detectButton");
+    const switchButton = document.getElementById("switchButton");
+    const statusElement = document.getElementById("status");
+    const detectionsListElement = document.getElementById("detectionsList");
+
+    // Global variables
+    let model;
+    let stream;
+    let facingMode = "environment"; // Start with back camera
+    let isModelLoading = false;
+
+    // Initialize the application
+    async function init() {
+      try {
+        statusElement.textContent = "Inicializando TensorFlow.js...";
+        await tf.ready();
+        statusElement.textContent = "TensorFlow.js inicializado correctamente.";
+
+        // Event listeners
+        startButton.addEventListener("click", startCamera);
+        detectButton.addEventListener("click", detectObjects);
+        switchButton.addEventListener("click", switchCamera);
+
+        // Load model
+        loadModel();
+      } catch (error) {
+        console.error("Error initializing:", error);
+        statusElement.textContent = `Error: ${error.message}`;
+      }
+    }
+
+    // Load the object detection model
+    async function loadModel() {
+      try {
+        isModelLoading = true;
+        statusElement.textContent = "Cargando modelo de detección...";
+
+        // In a real implementation, you would load the NanoDet model
+        // For this demo, we'll use COCO-SSD which is available in TensorFlow.js
+        model = await cocoSsd.load();
+
+        isModelLoading = false;
+        statusElement.textContent = "Modelo cargado correctamente. Puedes iniciar la cámara.";
+      } catch (error) {
+        console.error("Error loading model:", error);
+        statusElement.textContent = `Error al cargar el modelo: ${error.message}`;
+        isModelLoading = false;
+      }
+    }
+
+    // Start the camera
+    async function startCamera() {
+      try {
+        if (stream) {
+          stopCamera();
+        }
+
+        statusElement.textContent = "Iniciando cámara...";
+
+        const constraints = {
+          video: {
+            facingMode: facingMode,
+            width: { ideal: 640 },
+            height: { ideal: 480 }
+          }
+        };
+
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+
+        // Wait for video to be ready
+        await new Promise((resolve) => {
+          video.onloadedmetadata = () => {
+            resolve();
+          };
+        });
+
+        // Set canvas dimensions to match video
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
+        statusElement.textContent = "Cámara iniciada. Puedes detectar objetos.";
+        detectButton.disabled = false;
+        switchButton.disabled = false;
+        startButton.textContent = "Reiniciar Cámara";
+      } catch (error) {
+        console.error("Error starting camera:", error);
+        statusElement.textContent = `Error al iniciar la cámara: ${error.message}`;
+      }
+    }
+
+    // Stop the camera
+    function stopCamera() {
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+        video.srcObject = null;
+        stream = null;
+      }
+    }
+
+    // Switch between front and back cameras
+    function switchCamera() {
+      facingMode = facingMode === "environment" ? "user" : "environment";
+      startCamera();
+    }
+
+    // Detect objects in the current video frame
+    async function detectObjects() {
+      if (!model || !stream) {
+        statusElement.textContent = "Modelo o cámara no disponible.";
+        return;
+      }
+
+      try {
+        statusElement.textContent = "Detectando objetos...";
+        detectButton.disabled = true;
+
+        // Using COCO-SSD directly
+        const predictions = await model.detect(video);
+
+        // Display results
+        displayDetections(predictions);
+
+        // Draw bounding boxes
+        drawBoxes(predictions);
+
+        statusElement.textContent = "Detección completada.";
+        detectButton.disabled = false;
+      } catch (error) {
+        console.error("Error detecting objects:", error);
+        statusElement.textContent = `Error en la detección: ${error.message}`;
+        detectButton.disabled = false;
+      }
+    }
+
+    // Display detection results in the UI
+    function displayDetections(predictions) {
+      detectionsListElement.innerHTML = "";
+
+      if (predictions.length === 0) {
+        const item = document.createElement("div");
+        item.className = "detection-item";
+        item.textContent = "No se detectaron objetos.";
+        detectionsListElement.appendChild(item);
+        return;
+      }
+
+      predictions.forEach((prediction) => {
+        const item = document.createElement("div");
+        item.className = "detection-item";
+
+        const classElement = document.createElement("span");
+        classElement.className = "detection-class";
+        classElement.textContent = prediction.class;
+
+        const scoreElement = document.createElement("span");
+        scoreElement.className = "detection-score";
+        scoreElement.textContent = `${Math.round(prediction.score * 100)}%`;
+
+        item.appendChild(classElement);
+        item.appendChild(scoreElement);
+
+        detectionsListElement.appendChild(item);
+      });
+    }
+
+    // Draw bounding boxes on the canvas
+    function drawBoxes(predictions) {
+      // Clear canvas
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Draw each prediction
+      predictions.forEach((prediction) => {
+        const [x, y, width, height] = [
+          prediction.bbox[0],
+          prediction.bbox[1],
+          prediction.bbox[2],
+          prediction.bbox[3]
+        ];
+
+        // Draw bounding box
+        ctx.strokeStyle = "#00FFFF";
+        ctx.lineWidth = 4;
+        ctx.strokeRect(x, y, width, height);
+
+        // Draw label background
+        const label = `${prediction.class} ${Math.round(prediction.score * 100)}%`;
+        const textWidth = ctx.measureText(label).width;
+
+        ctx.fillStyle = "#00FFFF";
+        ctx.fillRect(x, y - 25, textWidth + 10, 25);
+
+        // Draw label text
+        ctx.fillStyle = "#000000";
+        ctx.font = "18px Arial";
+        ctx.fillText(label, x + 5, y - 7);
+      });
+    }
+
+    // Load COCO-SSD model
+    document.addEventListener('DOMContentLoaded', function() {
+      // Load COCO-SSD script dynamically
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd';
+      script.onload = init;
+      script.onerror = function() {
+        statusElement.textContent = "Error: Could not load COCO-SSD model. Check your internet connection.";
+      };
+      document.body.appendChild(script);
+    });
+
+    // Clean up when the page is closed
+    window.addEventListener("beforeunload", () => {
+      stopCamera();
+      if (model) {
+        model.dispose();
+      }
+    });
+  </script>
+</body>
+</html>
